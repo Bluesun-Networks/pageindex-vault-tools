@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vault Search</title>
+<style>
+/* ── Reset & Base ───────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #1e1e2e;
+  --bg-surface:#2a2a3c;
+  --bg-card:   #313145;
+  --bg-hover:  #3b3b52;
+  --border:    #44445a;
+  --text:      #cdd6f4;
+  --text-dim:  #a6adc8;
+  --accent:    #89b4fa;
+  --accent2:   #a6e3a1;
+  --accent3:   #f9e2af;
+  --danger:    #f38ba8;
+  --radius:    8px;
+  --shadow:    0 2px 8px rgba(0,0,0,.3);
+}
+
+html { font-size: 15px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Layout ─────────────────────────────────────────────────── */
+.container {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+
+header {
+  padding: 2rem 0 1rem;
+  text-align: center;
+}
+header h1 {
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: var(--text);
+}
+header h1 span { color: var(--accent); }
+header .subtitle {
+  font-size: .85rem;
+  color: var(--text-dim);
+  margin-top: .25rem;
+}
+
+/* ── Search Bar ─────────────────────────────────────────────── */
+.search-box {
+  display: flex;
+  gap: .5rem;
+  margin: 1.5rem 0;
+}
+.search-box input {
+  flex: 1;
+  padding: .75rem 1rem;
+  font-size: 1rem;
+  background: var(--bg-surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color .2s;
+}
+.search-box input:focus { border-color: var(--accent); }
+.search-box input::placeholder { color: var(--text-dim); }
+
+.search-box button {
+  padding: .75rem 1.5rem;
+  font-size: .95rem;
+  font-weight: 500;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity .2s;
+}
+.search-box button:hover { opacity: .85; }
+.search-box button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── Options Row ────────────────────────────────────────────── */
+.options {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  font-size: .85rem;
+  color: var(--text-dim);
+}
+.options label { display: flex; align-items: center; gap: .35rem; cursor: pointer; }
+.options input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 15px; height: 15px;
+}
+
+/* ── Status / Spinner ───────────────────────────────────────── */
+.status {
+  text-align: center;
+  padding: 2rem 0;
+  color: var(--text-dim);
+  font-size: .9rem;
+}
+.spinner {
+  display: inline-block;
+  width: 20px; height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: middle;
+  margin-right: .5rem;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Results ────────────────────────────────────────────────── */
+#results { margin-bottom: 3rem; }
+
+.result-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin-bottom: .75rem;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.result-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.result-card .doc-name {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--text);
+  margin-bottom: .15rem;
+}
+.result-card .vault-path {
+  font-size: .8rem;
+  color: var(--text-dim);
+  font-family: "SF Mono", "Fira Code", monospace;
+  margin-bottom: .4rem;
+}
+.result-card .reason {
+  font-size: .85rem;
+  color: var(--accent3);
+}
+
+/* ── Deep Sections ──────────────────────────────────────────── */
+.deep-sections {
+  margin-top: .6rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--border);
+}
+.deep-sections summary {
+  font-size: .8rem;
+  color: var(--accent2);
+  cursor: pointer;
+  user-select: none;
+}
+.deep-sections .section-item {
+  font-size: .8rem;
+  color: var(--text-dim);
+  padding: .25rem 0 .25rem 1rem;
+  border-left: 2px solid var(--border);
+  margin: .3rem 0;
+}
+.deep-sections .section-item .section-title {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ── Document Viewer Modal ──────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  z-index: 100;
+  justify-content: center;
+  align-items: start;
+  padding: 2rem 1rem;
+  overflow-y: auto;
+}
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.5);
+  width: 100%;
+  max-width: 800px;
+  padding: 1.5rem 2rem 2rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  position: relative;
+}
+.modal-close {
+  position: absolute;
+  top: .75rem; right: 1rem;
+  background: none; border: none;
+  color: var(--text-dim);
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.modal-close:hover { color: var(--text); }
+.modal-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: .25rem;
+}
+.modal-path {
+  font-size: .8rem;
+  color: var(--text-dim);
+  font-family: monospace;
+  margin-bottom: 1rem;
+}
+
+/* Rendered markdown inside modal */
+.doc-content {
+  font-size: .9rem;
+  line-height: 1.7;
+  color: var(--text);
+}
+.doc-content h1, .doc-content h2, .doc-content h3,
+.doc-content h4, .doc-content h5, .doc-content h6 {
+  color: var(--accent);
+  margin: 1.2em 0 .4em;
+  font-weight: 600;
+}
+.doc-content h1 { font-size: 1.4rem; }
+.doc-content h2 { font-size: 1.2rem; }
+.doc-content h3 { font-size: 1.05rem; }
+.doc-content p { margin: .5em 0; }
+.doc-content ul, .doc-content ol { padding-left: 1.5em; margin: .5em 0; }
+.doc-content code {
+  background: var(--bg); padding: .15em .35em;
+  border-radius: 4px; font-size: .85em;
+}
+.doc-content pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .75rem 1rem;
+  overflow-x: auto;
+  margin: .75em 0;
+}
+.doc-content pre code { background: none; padding: 0; }
+.doc-content blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1rem;
+  color: var(--text-dim);
+  margin: .75em 0;
+}
+.doc-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: .75em 0;
+}
+.doc-content th, .doc-content td {
+  border: 1px solid var(--border);
+  padding: .4rem .6rem;
+  text-align: left;
+}
+.doc-content th { background: var(--bg); }
+.doc-content img { max-width: 100%; border-radius: var(--radius); }
+.doc-content hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
+
+/* ── Footer ─────────────────────────────────────────────────── */
+footer {
+  text-align: center;
+  padding: 1.5rem 0;
+  font-size: .75rem;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .search-box { flex-direction: column; }
+  .modal { padding: 1rem; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1><span>Vault</span> Search</h1>
+    <p class="subtitle" id="subtitle">Loading catalog...</p>
+  </header>
+
+  <div class="search-box">
+    <input type="text" id="query" placeholder="Search your vault..." autocomplete="off">
+    <button id="searchBtn">Search</button>
+  </div>
+
+  <div class="options">
+    <label><input type="checkbox" id="deepToggle" checked> Deep search</label>
+  </div>
+
+  <div id="status"></div>
+  <div id="results"></div>
+</div>
+
+<!-- Document viewer modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <button class="modal-close" id="modalClose">&times;</button>
+    <div class="modal-title" id="modalTitle"></div>
+    <div class="modal-path" id="modalPath"></div>
+    <div class="doc-content" id="modalContent"></div>
+  </div>
+</div>
+
+<footer>
+  Vault Search &mdash; powered by PageIndex tree indexes
+</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const queryInput = $("#query");
+const searchBtn  = $("#searchBtn");
+const deepToggle = $("#deepToggle");
+const statusDiv  = $("#status");
+const resultsDiv = $("#results");
+const modal      = $("#modal");
+
+// ── Init ───────────────────────────────────────────────────────
+fetch("/api/stats")
+  .then(r => r.json())
+  .then(d => { $("#subtitle").textContent = `${d.doc_count.toLocaleString()} documents indexed`; })
+  .catch(() => { $("#subtitle").textContent = "Obsidian vault search"; });
+
+// ── Search ─────────────────────────────────────────────────────
+queryInput.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+searchBtn.addEventListener("click", doSearch);
+
+async function doSearch() {
+  const query = queryInput.value.trim();
+  if (!query) return;
+
+  searchBtn.disabled = true;
+  resultsDiv.innerHTML = "";
+  statusDiv.innerHTML = `<span class="spinner"></span> Searching — this may take 10–30 seconds...`;
+
+  try {
+    const resp = await fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, deep: deepToggle.checked, top_n: 10 }),
+    });
+    const data = await resp.json();
+
+    if (!data.results || data.results.length === 0) {
+      statusDiv.innerHTML = `<p>No results found.</p>`;
+      return;
+    }
+
+    statusDiv.innerHTML = `<p>Found ${data.results.length} result${data.results.length !== 1 ? "s" : ""}</p>`;
+    renderResults(data.results, data.deep_results || {});
+  } catch (err) {
+    statusDiv.innerHTML = `<p style="color:var(--danger)">Search failed: ${esc(err.message)}</p>`;
+  } finally {
+    searchBtn.disabled = false;
+  }
+}
+
+function renderResults(results, deepResults) {
+  resultsDiv.innerHTML = "";
+  results.forEach((doc, i) => {
+    const card = document.createElement("div");
+    card.className = "result-card";
+
+    let html = `
+      <div class="doc-name">${esc(doc.doc_name)}</div>
+      <div class="vault-path">${esc(doc.vault_path || "")}</div>
+      <div class="reason">${esc(doc.relevance_reason || "")}</div>
+    `;
+
+    const sections = deepResults[doc.doc_name];
+    if (sections && sections.length > 0) {
+      html += `<div class="deep-sections"><details><summary>${sections.length} relevant section${sections.length !== 1 ? "s" : ""} found</summary>`;
+      sections.forEach(s => {
+        html += `<div class="section-item">
+          <span class="section-title">${esc(s.title || s.node_id || "")}</span>
+          &mdash; ${esc(s.relevance || "")}
+        </div>`;
+      });
+      html += `</details></div>`;
+    }
+
+    card.innerHTML = html;
+    card.addEventListener("click", e => {
+      // Don't open modal when clicking on the details toggle
+      if (e.target.closest("details")) return;
+      openDocument(doc.vault_path || doc.doc_name, doc.doc_name);
+    });
+    resultsDiv.appendChild(card);
+  });
+}
+
+// ── Document Viewer ────────────────────────────────────────────
+async function openDocument(path, name) {
+  $("#modalTitle").textContent = name;
+  $("#modalPath").textContent = path;
+  $("#modalContent").innerHTML = `<p><span class="spinner"></span> Loading document...</p>`;
+  modal.classList.add("open");
+
+  try {
+    const resp = await fetch(`/api/doc?path=${encodeURIComponent(path)}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    $("#modalContent").innerHTML = data.html;
+  } catch (err) {
+    $("#modalContent").innerHTML = `<p style="color:var(--danger)">Could not load document: ${esc(err.message)}</p>`;
+  }
+}
+
+$("#modalClose").addEventListener("click", () => modal.classList.remove("open"));
+modal.addEventListener("click", e => { if (e.target === modal) modal.classList.remove("open"); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") modal.classList.remove("open"); });
+
+// ── Util ───────────────────────────────────────────────────────
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
