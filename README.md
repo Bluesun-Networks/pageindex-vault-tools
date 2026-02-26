@@ -38,6 +38,8 @@ uv pip install -r requirements.txt
 
 ### 2. Clone this repo and install
 
+> **Note:** Activate the PageIndex venv from step 1 first (`source venv/bin/activate` or `source .venv/bin/activate`). The vault tools share the same Python dependencies.
+
 #### With pip
 ```bash
 git clone https://github.com/Bluesun-Networks/pageindex-vault-tools.git
@@ -51,8 +53,6 @@ git clone https://github.com/Bluesun-Networks/pageindex-vault-tools.git
 cd pageindex-vault-tools
 uv pip install -r requirements.txt
 ```
-
-Or run directly: `uv run python vault_search.py "query"`
 
 ### 3. Set your API key
 
