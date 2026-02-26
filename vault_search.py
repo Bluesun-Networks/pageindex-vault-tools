@@ -36,6 +36,17 @@ MODEL = os.getenv("PAGEINDEX_MODEL", "gpt-4o-2024-11-20")
 BASE_URL = os.getenv("PAGEINDEX_BASE_URL")  # Set for OpenAI-compatible APIs
 PROVIDER = os.getenv("PAGEINDEX_PROVIDER", "openai").lower()
 
+# Bedrock API key support (OpenAI-compatible endpoint)
+BEDROCK_API_KEY = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+BEDROCK_REGION = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-west-2"
+if BEDROCK_API_KEY and PROVIDER != "bedrock":
+    # Auto-detect: if bearer token is set but provider isn't explicitly bedrock,
+    # switch to bedrock-apikey mode
+    PROVIDER = "bedrock-apikey"
+elif BEDROCK_API_KEY and PROVIDER == "bedrock":
+    # Prefer API key over boto3 if both are available
+    PROVIDER = "bedrock-apikey"
+
 # Bedrock model mapping
 BEDROCK_MODELS = {
     'claude-3.5-sonnet': 'anthropic.claude-3-5-sonnet-20241022-v2:0',
@@ -56,6 +67,10 @@ def _resolve_bedrock_model():
 
 
 def get_client():
+    if PROVIDER == "bedrock-apikey":
+        # Use Bedrock's OpenAI-compatible endpoint with API key
+        base_url = BASE_URL or f"https://bedrock-mantle.{BEDROCK_REGION}.api.aws/v1"
+        return openai.OpenAI(api_key=BEDROCK_API_KEY, base_url=base_url)
     if PROVIDER == "bedrock":
         if not HAS_BOTO3:
             raise ImportError("boto3 is required for Bedrock provider. Install with: pip install boto3")
@@ -90,8 +105,9 @@ def llm_call(client, prompt, system=None, temperature=0, retries=5):
                 result = json.loads(response['body'].read())
                 return result['content'][0]['text']
             else:
+                model = _resolve_bedrock_model() if PROVIDER == "bedrock-apikey" else MODEL
                 resp = client.chat.completions.create(
-                    model=MODEL, messages=messages, temperature=temperature
+                    model=model, messages=messages, temperature=temperature
                 )
                 return resp.choices[0].message.content
         except Exception as e:

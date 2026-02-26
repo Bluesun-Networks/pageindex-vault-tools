@@ -268,6 +268,7 @@ All config via environment variables (or `.env` file):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHATGPT_API_KEY` | (required for OpenAI) | OpenAI API key |
+| `AWS_BEARER_TOKEN_BEDROCK` | (none) | Bedrock API key (auto-enables Bedrock) |
 | `PAGEINDEX_PROVIDER` | `openai` | LLM provider: `openai` or `bedrock` |
 | `PAGEINDEX_MODEL` | `gpt-4o-2024-11-20` | Model for search queries |
 | `PAGEINDEX_BASE_URL` | (none) | For OpenAI-compatible APIs |
@@ -279,22 +280,50 @@ All config via environment variables (or `.env` file):
 
 ### Using Amazon Bedrock
 
-Set `PAGEINDEX_PROVIDER=bedrock` and ensure AWS credentials are available (env vars, `~/.aws/credentials`, or IAM role).
+There are two ways to authenticate with Bedrock:
+
+#### Option A: Bedrock API Key (recommended)
+
+Uses Bedrock's OpenAI-compatible endpoint — no boto3 needed.
+
+```bash
+# .env
+AWS_BEARER_TOKEN_BEDROCK=your-bedrock-api-key
+AWS_REGION=us-west-2
+
+# Optional: override model (default is Claude 3.5 Sonnet)
+# PAGEINDEX_MODEL=claude-3.5-sonnet
+```
+
+Get an API key from the [Bedrock console](https://console.aws.amazon.com/bedrock/) → API keys.
+
+The tool auto-detects the API key and uses `https://bedrock-mantle.{region}.api.aws/v1` as the endpoint. Override with `PAGEINDEX_BASE_URL` if needed.
+
+#### Option B: IAM credentials (boto3)
+
+Uses the native Bedrock SDK with IAM auth.
 
 ```bash
 # .env
 PAGEINDEX_PROVIDER=bedrock
 AWS_REGION=us-west-2
-# Optional: override model (default is Claude 3.5 Sonnet)
+# Optional: override model
 # BEDROCK_MODEL_ID=anthropic.claude-3-5-haiku-20241022-v1:0
-
-# Friendly model names also work:
-# PAGEINDEX_MODEL=claude-3.5-sonnet
 ```
 
-Install the optional Bedrock dependencies:
+Ensure AWS credentials are available (env vars, `~/.aws/credentials`, or IAM role).
+
 ```bash
 pip install boto3  # or: uv pip install boto3
+```
+
+#### Friendly model names
+
+Both options support friendly names:
+
+```bash
+PAGEINDEX_MODEL=claude-3.5-sonnet   # → anthropic.claude-3-5-sonnet-20241022-v2:0
+PAGEINDEX_MODEL=claude-3.5-haiku    # → anthropic.claude-3-5-haiku-20241022-v1:0
 ```
 
 ## Cost
