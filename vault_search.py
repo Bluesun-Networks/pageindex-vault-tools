@@ -235,6 +235,61 @@ def load_catalog():
         return json.load(f)
 
 
+def local_search(catalog, query, top_n=10):
+    """Fast local keyword search — no LLM calls. Scores by keyword overlap."""
+    import re
+    from collections import Counter
+
+    query_terms = set(re.findall(r'\w+', query.lower()))
+    if not query_terms:
+        return []
+
+    scored = []
+    for i, doc in enumerate(catalog):
+        score = 0
+        name_lower = doc.get("doc_name", "").lower()
+
+        # Exact substring match in doc name is a strong signal
+        if query.lower() in name_lower:
+            score += 50
+
+        # Term overlap in doc name
+        name_terms = set(re.findall(r'\w+', name_lower))
+        name_overlap = len(query_terms & name_terms)
+        score += name_overlap * 10
+
+        # Term overlap in section titles and summaries
+        for section in doc.get("sections", []):
+            title = (section.get("title") or "").lower()
+            summary = (section.get("summary") or "").lower()
+            text = title + " " + summary
+
+            text_terms = set(re.findall(r'\w+', text))
+            overlap = len(query_terms & text_terms)
+            score += overlap * 3
+
+            # Bonus for exact query substring in title
+            if query.lower() in title:
+                score += 20
+
+            # Check subsections too
+            for sub in section.get("subsections", []):
+                if any(t in sub.lower() for t in query_terms):
+                    score += 2
+
+        if score > 0:
+            scored.append((score, i, doc))
+
+    scored.sort(key=lambda x: -x[0])
+    results = []
+    for score, idx, doc in scored[:top_n]:
+        results.append({
+            **doc,
+            "relevance_reason": f"keyword match (score: {score})"
+        })
+    return results
+
+
 def search_catalog(client, catalog, query, top_n=10):
     """Use LLM to find relevant documents from the catalog. Chunks if needed."""
     
@@ -388,24 +443,30 @@ def format_results(catalog_matches, deep_results=None):
     return "\n".join(output)
 
 
-def search(query, deep=True, top_n=10):
-    """Main search function."""
-    client = get_client()
+def search(query, deep=True, top_n=10, fast=False):
+    """Main search function. fast=True uses local keyword search (no LLM)."""
     catalog = load_catalog()
     
     print(f"\n🔍 Searching vault for: \"{query}\"")
-    print(f"   Catalog: {len(catalog)} documents\n")
+    print(f"   Catalog: {len(catalog)} documents")
+    print(f"   Mode: {'fast (local)' if fast else 'semantic (LLM)'}\n")
     
-    # Phase 1: Find relevant documents
-    matches = search_catalog(client, catalog, query, top_n=top_n)
+    if fast:
+        # Phase 1: Local keyword search — instant, no API calls
+        matches = local_search(catalog, query, top_n=top_n)
+    else:
+        # Phase 1: LLM-powered semantic search
+        client = get_client()
+        matches = search_catalog(client, catalog, query, top_n=top_n)
     
     if not matches:
         print("No relevant documents found.")
         return
     
-    # Phase 2: Deep search within top matches
+    # Phase 2: Deep search within top matches (skip in fast mode)
     deep_results = {}
-    if deep:
+    if deep and not fast:
+        client = client if not fast else get_client()
         print(f"Deep searching top {min(3, len(matches))} documents...")
         for doc in matches[:3]:
             index_path = doc.get("index_path")
@@ -447,6 +508,7 @@ if __name__ == "__main__":
     parser.add_argument("--rebuild-catalog", action="store_true", help="Rebuild master catalog")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive mode")
     parser.add_argument("--shallow", action="store_true", help="Skip deep search")
+    parser.add_argument("--fast", "-f", action="store_true", help="Fast local keyword search (no LLM calls)")
     parser.add_argument("--top", type=int, default=10, help="Number of results")
     args = parser.parse_args()
     
@@ -455,6 +517,6 @@ if __name__ == "__main__":
     elif args.interactive:
         interactive_mode()
     elif args.query:
-        search(args.query, deep=not args.shallow, top_n=args.top)
+        search(args.query, deep=not args.shallow, top_n=args.top, fast=args.fast)
     else:
         parser.print_help()
