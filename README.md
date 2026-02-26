@@ -97,10 +97,86 @@ python vault_search.py --shallow "homelab setup"
 
 ### 7. Web UI (optional)
 
+The web UI is a FastAPI app that provides a browser-based search interface.
+
+#### Foreground (development)
+
 ```bash
-pip install -r requirements.txt  # or: uv pip install -r requirements.txt
-uvicorn app:app --port 8888
+uvicorn app:app --host 0.0.0.0 --port 8888 --reload
 # Open http://localhost:8888
+# Ctrl+C to stop
+```
+
+#### Background (daemon)
+
+With `nohup`:
+```bash
+nohup uvicorn app:app --host 0.0.0.0 --port 8888 >> vault-search.log 2>&1 &
+echo $!  # save the PID if you need to stop it later
+```
+
+With `systemd` (Linux):
+```ini
+# /etc/systemd/system/vault-search.service
+[Unit]
+Description=Vault Search Web UI
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/pageindex-vault-tools
+Environment=PYTHONPATH=/path/to/PageIndex
+EnvironmentFile=/path/to/pageindex-vault-tools/.env
+ExecStart=/path/to/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8888
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now vault-search
+sudo systemctl status vault-search
+```
+
+With `launchd` (macOS):
+```xml
+<!-- ~/Library/LaunchAgents/com.vaultsearch.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vaultsearch</string>
+    <key>WorkingDirectory</key>
+    <string>/path/to/pageindex-vault-tools</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/venv/bin/uvicorn</string>
+        <string>app:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8888</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/vault-search.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/vault-search.log</string>
+</dict>
+</plist>
+```
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.vaultsearch.plist
+launchctl list | grep vaultsearch
 ```
 
 ## How It Works
