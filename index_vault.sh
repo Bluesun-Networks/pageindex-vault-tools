@@ -16,6 +16,15 @@ LOGFILE="${RESULTS}/indexing.log"
 ERRLOG="${RESULTS}/indexing-errors.log"
 MIN_LINES=3  # Skip files with fewer lines than this
 
+# ── LLM Provider ──────────────────────────────────────────────────
+# Set PAGEINDEX_PROVIDER=bedrock to use Amazon Bedrock instead of OpenAI.
+# Bedrock uses the standard AWS credential chain (env vars, ~/.aws/credentials, IAM role).
+# Optional: BEDROCK_MODEL_ID, AWS_REGION (default: us-west-2)
+# These env vars are passed through to PageIndex automatically.
+export PAGEINDEX_PROVIDER="${PAGEINDEX_PROVIDER:-openai}"
+export AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}"
+export BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-}"
+
 # ── Setup ──────────────────────────────────────────────────────────
 mkdir -p "$RESULTS"
 

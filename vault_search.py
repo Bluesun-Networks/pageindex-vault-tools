@@ -15,10 +15,17 @@ import glob
 import argparse
 from pathlib import Path
 
-# Support both OpenAI and OpenAI-compatible APIs
+# Support OpenAI, OpenAI-compatible APIs, and Amazon Bedrock
 import openai
 from dotenv import load_dotenv
 load_dotenv()
+
+# Optional Bedrock dependencies
+try:
+    import boto3
+    HAS_BOTO3 = True
+except ImportError:
+    HAS_BOTO3 = False
 
 INDEX_DIR = os.path.expanduser("~/src/PageIndex/vault-index")
 CATALOG_PATH = os.path.expanduser("~/src/PageIndex/vault-catalog.json")
@@ -27,9 +34,32 @@ VAULT_ROOT = os.path.expanduser("~/src/shared-vault")
 API_KEY = os.getenv("CHATGPT_API_KEY") or os.getenv("OPENAI_API_KEY")
 MODEL = os.getenv("PAGEINDEX_MODEL", "gpt-4o-2024-11-20")
 BASE_URL = os.getenv("PAGEINDEX_BASE_URL")  # Set for OpenAI-compatible APIs
+PROVIDER = os.getenv("PAGEINDEX_PROVIDER", "openai").lower()
+
+# Bedrock model mapping
+BEDROCK_MODELS = {
+    'claude-3.5-sonnet': 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'claude-3-sonnet': 'anthropic.claude-3-sonnet-20240229-v1:0',
+    'claude-3-haiku': 'anthropic.claude-3-haiku-20240307-v1:0',
+    'claude-3.5-haiku': 'anthropic.claude-3-5-haiku-20241022-v1:0',
+}
+BEDROCK_DEFAULT_MODEL = 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+
+
+def _get_aws_region():
+    return os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-west-2"
+
+
+def _resolve_bedrock_model():
+    model_id = os.getenv("BEDROCK_MODEL_ID") or MODEL
+    return BEDROCK_MODELS.get(model_id, model_id)
 
 
 def get_client():
+    if PROVIDER == "bedrock":
+        if not HAS_BOTO3:
+            raise ImportError("boto3 is required for Bedrock provider. Install with: pip install boto3")
+        return boto3.client('bedrock-runtime', region_name=_get_aws_region())
     kwargs = {"api_key": API_KEY}
     if BASE_URL:
         kwargs["base_url"] = BASE_URL
@@ -44,13 +74,29 @@ def llm_call(client, prompt, system=None, temperature=0, retries=5):
     messages.append({"role": "user", "content": prompt})
     for attempt in range(retries):
         try:
-            resp = client.chat.completions.create(
-                model=MODEL, messages=messages, temperature=temperature
-            )
-            return resp.choices[0].message.content
-        except openai.RateLimitError as e:
+            if PROVIDER == "bedrock":
+                body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4096,
+                    "temperature": temperature,
+                    "messages": messages,
+                }
+                response = client.invoke_model(
+                    modelId=_resolve_bedrock_model(),
+                    contentType='application/json',
+                    accept='application/json',
+                    body=json.dumps(body),
+                )
+                result = json.loads(response['body'].read())
+                return result['content'][0]['text']
+            else:
+                resp = client.chat.completions.create(
+                    model=MODEL, messages=messages, temperature=temperature
+                )
+                return resp.choices[0].message.content
+        except Exception as e:
             wait = min(2 ** attempt, 30)
-            print(f"  Rate limited, waiting {wait}s...")
+            print(f"  Error: {e}, waiting {wait}s...")
             time.sleep(wait)
     raise Exception("Max retries exceeded")
 

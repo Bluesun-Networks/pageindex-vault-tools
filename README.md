@@ -14,12 +14,13 @@ Instead of chunking documents and embedding them into vectors (traditional RAG),
 
 - Python 3.10+
 - [PageIndex](https://github.com/VectifyAI/PageIndex) cloned and installed
-- An OpenAI API key (PageIndex uses GPT-4o by default)
+- An OpenAI API key **or** AWS credentials with Bedrock access
 
 ## Quick Start
 
 ### 1. Clone PageIndex and install
 
+#### With pip
 ```bash
 git clone https://github.com/VectifyAI/PageIndex.git
 cd PageIndex
@@ -27,18 +28,37 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Clone this repo
+#### With uv (faster)
+```bash
+git clone https://github.com/VectifyAI/PageIndex.git
+cd PageIndex
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
+```
 
+### 2. Clone this repo and install
+
+#### With pip
 ```bash
 git clone https://github.com/Bluesun-Networks/pageindex-vault-tools.git
 cd pageindex-vault-tools
+pip install -r requirements.txt
 ```
+
+#### With uv (faster)
+```bash
+git clone https://github.com/Bluesun-Networks/pageindex-vault-tools.git
+cd pageindex-vault-tools
+uv pip install -r requirements.txt
+```
+
+Or run directly: `uv run python vault_search.py "query"`
 
 ### 3. Set your API key
 
 ```bash
 cp .env.example .env
-# Edit .env and add your OpenAI API key
+# Edit .env — add your OpenAI API key or configure Bedrock (see below)
 ```
 
 ### 4. Index your vault
@@ -78,7 +98,7 @@ python vault_search.py --shallow "homelab setup"
 ### 7. Web UI (optional)
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt  # or: uv pip install -r requirements.txt
 uvicorn app:app --port 8888
 # Open http://localhost:8888
 ```
@@ -113,12 +133,35 @@ All config via environment variables (or `.env` file):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHATGPT_API_KEY` | (required) | OpenAI API key |
+| `CHATGPT_API_KEY` | (required for OpenAI) | OpenAI API key |
+| `PAGEINDEX_PROVIDER` | `openai` | LLM provider: `openai` or `bedrock` |
 | `PAGEINDEX_MODEL` | `gpt-4o-2024-11-20` | Model for search queries |
 | `PAGEINDEX_BASE_URL` | (none) | For OpenAI-compatible APIs |
+| `AWS_REGION` | `us-west-2` | AWS region for Bedrock |
+| `BEDROCK_MODEL_ID` | `anthropic.claude-3-5-sonnet-20241022-v2:0` | Bedrock model override |
 | `VAULT_PATH` | `~/src/shared-vault` | Path to your Obsidian vault |
 | `INDEX_DIR` | `~/src/PageIndex/vault-index` | Where tree indexes are stored |
 | `CATALOG_PATH` | `~/src/PageIndex/vault-catalog.json` | Master catalog location |
+
+### Using Amazon Bedrock
+
+Set `PAGEINDEX_PROVIDER=bedrock` and ensure AWS credentials are available (env vars, `~/.aws/credentials`, or IAM role).
+
+```bash
+# .env
+PAGEINDEX_PROVIDER=bedrock
+AWS_REGION=us-west-2
+# Optional: override model (default is Claude 3.5 Sonnet)
+# BEDROCK_MODEL_ID=anthropic.claude-3-5-haiku-20241022-v1:0
+
+# Friendly model names also work:
+# PAGEINDEX_MODEL=claude-3.5-sonnet
+```
+
+Install the optional Bedrock dependencies:
+```bash
+pip install boto3  # or: uv pip install boto3
+```
 
 ## Cost
 
@@ -128,7 +171,7 @@ All config via environment variables (or `.env` file):
 
 ## Limitations
 
-- **OpenAI-only** (for now) — PageIndex is hardcoded to OpenAI. You can point `PAGEINDEX_BASE_URL` at an OpenAI-compatible API for search queries, but indexing still uses OpenAI.
+- **OpenAI or Bedrock** — Supports OpenAI (default) and Amazon Bedrock. Set `PAGEINDEX_PROVIDER=bedrock` to use Bedrock with Claude models.
 - **Rate limits** — New OpenAI accounts have low TPM limits (30K). Searches may be slow until limits increase.
 - **No incremental re-indexing** — Changed files need full re-indexing. The script skips already-indexed files.
 - **Large catalogs need chunking** — With 2,000+ docs, the catalog gets split across multiple LLM calls.
