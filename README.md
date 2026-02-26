@@ -13,12 +13,15 @@ Instead of chunking documents and embedding them into vectors (traditional RAG),
 ## Prerequisites
 
 - Python 3.10+
-- [PageIndex](https://github.com/VectifyAI/PageIndex) cloned and installed
 - An OpenAI API key **or** AWS credentials with Bedrock access
 
-## Quick Start
+---
 
-### 1. Clone PageIndex and install
+## Part 1: Set Up PageIndex
+
+PageIndex is the core indexing engine. Set it up first.
+
+### 1.1 Clone and create a virtual environment
 
 #### With pip
 ```bash
@@ -36,9 +39,46 @@ uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-### 2. Clone this repo and install
+### 1.2 Configure your LLM API key
 
-> **Note:** Activate the PageIndex venv from step 1 first (`source venv/bin/activate` or `source .venv/bin/activate`). The vault tools share the same Python dependencies.
+```bash
+export CHATGPT_API_KEY="sk-..."
+```
+
+Or for Bedrock:
+```bash
+export PAGEINDEX_PROVIDER=bedrock
+export AWS_REGION=us-west-2
+# AWS credentials via env vars, ~/.aws/credentials, or IAM role
+```
+
+### 1.3 Test it
+
+Try indexing a single file to make sure everything works:
+
+```bash
+python run_pageindex.py --pdf_path /path/to/any/document.pdf
+```
+
+If that produces a JSON tree output, PageIndex is working.
+
+---
+
+## Part 2: Set Up Vault Tools
+
+The vault tools wrap PageIndex for Obsidian vault indexing, CLI search, and a web UI.
+
+### 2.1 Clone and install (into the same venv)
+
+Activate the PageIndex venv from Part 1 first:
+
+```bash
+# If you're not already in the venv:
+cd /path/to/PageIndex
+source venv/bin/activate   # or: source .venv/bin/activate (uv)
+```
+
+Then install the vault tools:
 
 #### With pip
 ```bash
@@ -47,21 +87,36 @@ cd pageindex-vault-tools
 pip install -r requirements.txt
 ```
 
-#### With uv (faster)
+#### With uv
 ```bash
 git clone https://github.com/Bluesun-Networks/pageindex-vault-tools.git
 cd pageindex-vault-tools
 uv pip install -r requirements.txt
 ```
 
-### 3. Set your API key
+### 2.2 Configure
 
 ```bash
 cp .env.example .env
-# Edit .env — add your OpenAI API key or configure Bedrock (see below)
 ```
 
-### 4. Index your vault
+Edit `.env` with your settings:
+
+```bash
+# LLM provider (openai or bedrock)
+CHATGPT_API_KEY=sk-...
+PAGEINDEX_PROVIDER=openai
+PAGEINDEX_MODEL=gpt-4o-2024-11-20
+
+# Paths
+VAULT_PATH=~/src/shared-vault          # your Obsidian vault
+INDEX_DIR=~/src/PageIndex/vault-index   # where tree indexes are stored
+CATALOG_PATH=~/src/PageIndex/vault-catalog.json
+```
+
+See [Configuration](#configuration) below for the full list of options.
+
+### 2.3 Index your vault
 
 ```bash
 # Edit VAULT and PAGEINDEX_DIR in index_vault.sh first
@@ -76,16 +131,16 @@ This will:
 
 On a ~2,400 file vault, this takes 1-2 hours and costs ~$10 in OpenAI API calls. It's a one-time cost — only re-index files that change.
 
-### 5. Build the search catalog
+### 2.4 Build the search catalog
 
 ```bash
 python vault_search.py --rebuild-catalog
 ```
 
-### 6. Search!
+### 2.5 Search (CLI)
 
 ```bash
-# CLI search
+# Single query
 python vault_search.py "What CI/CD solution did we choose?"
 
 # Interactive mode
@@ -95,7 +150,7 @@ python vault_search.py --interactive
 python vault_search.py --shallow "homelab setup"
 ```
 
-### 7. Web UI (optional)
+### 2.6 Search (Web UI)
 
 The web UI is a FastAPI app that provides a browser-based search interface.
 
@@ -107,15 +162,15 @@ uvicorn app:app --host 0.0.0.0 --port 8888 --reload
 # Ctrl+C to stop
 ```
 
-#### Background (daemon)
+#### Background (quick)
 
-With `nohup`:
 ```bash
 nohup uvicorn app:app --host 0.0.0.0 --port 8888 >> vault-search.log 2>&1 &
 echo $!  # save the PID if you need to stop it later
 ```
 
-With `systemd` (Linux):
+#### Daemon — systemd (Linux)
+
 ```ini
 # /etc/systemd/system/vault-search.service
 [Unit]
@@ -141,7 +196,8 @@ sudo systemctl enable --now vault-search
 sudo systemctl status vault-search
 ```
 
-With `launchd` (macOS):
+#### Daemon — launchd (macOS)
+
 ```xml
 <!-- ~/Library/LaunchAgents/com.vaultsearch.plist -->
 <?xml version="1.0" encoding="UTF-8"?>
@@ -178,6 +234,8 @@ With `launchd` (macOS):
 launchctl load ~/Library/LaunchAgents/com.vaultsearch.plist
 launchctl list | grep vaultsearch
 ```
+
+---
 
 ## How It Works
 
