@@ -27,6 +27,13 @@ try:
 except ImportError:
     HAS_BOTO3 = False
 
+# Optional numpy for embedding search
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
 INDEX_DIR = os.path.expandvars(os.path.expanduser(
     os.getenv("INDEX_DIR", "~/src/PageIndex/vault-index")))
 CATALOG_PATH = os.path.expandvars(os.path.expanduser(
@@ -58,6 +65,10 @@ BEDROCK_MODELS = {
     'claude-3.5-haiku': 'anthropic.claude-3-5-haiku-20241022-v1:0',
 }
 BEDROCK_DEFAULT_MODEL = 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+
+# Embedding config
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+EMBEDDING_REGION = os.getenv("EMBEDDING_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-west-2"
 
 
 def _get_aws_region():
@@ -141,6 +152,124 @@ def extract_json_from_response(text):
                 except json.JSONDecodeError:
                     continue
     return None
+
+
+def _embeddings_path():
+    """Return the embeddings file path derived from CATALOG_PATH."""
+    return CATALOG_PATH.replace(".json", "-embeddings.npz")
+
+
+def _get_embedding_client():
+    """Get a boto3 bedrock-runtime client for embeddings."""
+    if not HAS_BOTO3:
+        raise ImportError("boto3 is required for embedding generation. Install with: pip install boto3")
+    return boto3.client('bedrock-runtime', region_name=EMBEDDING_REGION)
+
+
+def _embed_text(client, text):
+    """Embed a single text string using Titan Embeddings v2. Returns list of floats."""
+    response = client.invoke_model(
+        modelId=EMBEDDING_MODEL,
+        contentType='application/json',
+        accept='application/json',
+        body=json.dumps({"inputText": text})
+    )
+    result = json.loads(response['body'].read())
+    return result['embedding']
+
+
+def _doc_to_embedding_text(doc):
+    """Build embedding input text from a catalog document entry."""
+    parts = [doc.get("doc_name", "")]
+    for section in doc.get("sections", []):
+        if section.get("title"):
+            parts.append(section["title"])
+        if section.get("summary"):
+            parts.append(section["summary"])
+        for sub in section.get("subsections", []):
+            parts.append(sub)
+    text = "\n".join(parts)
+    return text[:8000]
+
+
+def build_embeddings(catalog):
+    """Generate embeddings for all catalog documents and save to .npz file."""
+    if not HAS_NUMPY:
+        print("numpy is required for embeddings. Install with: pip install numpy")
+        return None
+    if not HAS_BOTO3:
+        print("boto3 is required for embeddings. Install with: pip install boto3")
+        return None
+
+    import time
+    client = _get_embedding_client()
+    total = len(catalog)
+    embeddings = []
+    failed = []
+
+    for i, doc in enumerate(catalog):
+        print(f"  Embedding {i+1}/{total}: {doc.get('doc_name', '?')[:60]}", end="")
+        try:
+            text = _doc_to_embedding_text(doc)
+            emb = _embed_text(client, text)
+            embeddings.append(emb)
+            print(" ✓")
+        except Exception as e:
+            print(f" ✗ ({e})")
+            # Use zero vector as placeholder to maintain alignment
+            if embeddings:
+                embeddings.append([0.0] * len(embeddings[0]))
+            else:
+                embeddings.append([0.0] * 1024)  # Titan v2 default dim
+            failed.append(i)
+            time.sleep(0.5)  # Back off on errors
+
+    matrix = np.array(embeddings, dtype=np.float32)
+    out_path = _embeddings_path()
+    np.savez_compressed(out_path, embeddings=matrix)
+    print(f"\nEmbeddings saved: {out_path} ({matrix.shape})")
+    if failed:
+        print(f"  ⚠ {len(failed)} documents failed embedding (zero vectors)")
+    return matrix
+
+
+def load_embeddings():
+    """Load embeddings from .npz file if it exists. Returns numpy array or None."""
+    if not HAS_NUMPY:
+        return None
+    path = _embeddings_path()
+    if not os.path.exists(path):
+        return None
+    data = np.load(path)
+    return data['embeddings']
+
+
+def embedding_search(catalog, embeddings, query, top_n=10):
+    """Search catalog using cosine similarity against precomputed embeddings."""
+    client = _get_embedding_client()
+    query_emb = np.array(_embed_text(client, query), dtype=np.float32)
+
+    # Cosine similarity against all embeddings
+    norms = np.linalg.norm(embeddings, axis=1)
+    query_norm = np.linalg.norm(query_emb)
+
+    # Avoid division by zero (failed embeddings have zero vectors)
+    valid = (norms > 0) & (query_norm > 0)
+    similarities = np.zeros(len(embeddings))
+    similarities[valid] = embeddings[valid] @ query_emb / (norms[valid] * query_norm)
+
+    # Get top N indices
+    top_indices = np.argsort(similarities)[::-1][:top_n]
+
+    results = []
+    for idx in top_indices:
+        if similarities[idx] <= 0:
+            continue
+        results.append({
+            **catalog[idx],
+            "relevance_reason": f"embedding similarity: {similarities[idx]:.3f}"
+        })
+    return results
 
 
 def build_catalog():
@@ -446,16 +575,24 @@ def format_results(catalog_matches, deep_results=None):
 def search(query, deep=True, top_n=10, fast=False):
     """Main search function. fast=True uses local keyword search (no LLM)."""
     catalog = load_catalog()
+    embeddings = load_embeddings()
+    
+    if fast:
+        mode = "fast (keyword)"
+    elif embeddings is not None and len(embeddings) == len(catalog):
+        mode = "embedding (semantic)"
+    else:
+        mode = "LLM (semantic)"
     
     print(f"\n🔍 Searching vault for: \"{query}\"")
     print(f"   Catalog: {len(catalog)} documents")
-    print(f"   Mode: {'fast (local)' if fast else 'semantic (LLM)'}\n")
+    print(f"   Mode: {mode}\n")
     
     if fast:
-        # Phase 1: Local keyword search — instant, no API calls
         matches = local_search(catalog, query, top_n=top_n)
+    elif mode == "embedding (semantic)":
+        matches = embedding_search(catalog, embeddings, query, top_n=top_n)
     else:
-        # Phase 1: LLM-powered semantic search
         client = get_client()
         matches = search_catalog(client, catalog, query, top_n=top_n)
     
@@ -506,6 +643,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Search vault using PageIndex trees")
     parser.add_argument("query", nargs="?", help="Search query")
     parser.add_argument("--rebuild-catalog", action="store_true", help="Rebuild master catalog")
+    parser.add_argument("--embed", action="store_true", help="Build/rebuild embeddings only")
+    parser.add_argument("--no-embed", action="store_true", help="Skip embedding generation during catalog rebuild")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive mode")
     parser.add_argument("--shallow", action="store_true", help="Skip deep search")
     parser.add_argument("--fast", "-f", action="store_true", help="Fast local keyword search (no LLM calls)")
@@ -513,7 +652,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.rebuild_catalog:
-        build_catalog()
+        catalog = build_catalog()
+        if not args.no_embed:
+            print("\nGenerating embeddings...")
+            build_embeddings(catalog)
+    elif args.embed:
+        catalog = load_catalog()
+        build_embeddings(catalog)
     elif args.interactive:
         interactive_mode()
     elif args.query:
