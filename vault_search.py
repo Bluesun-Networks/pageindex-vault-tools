@@ -27,9 +27,12 @@ try:
 except ImportError:
     HAS_BOTO3 = False
 
-INDEX_DIR = os.path.expanduser("~/src/PageIndex/vault-index")
-CATALOG_PATH = os.path.expanduser("~/src/PageIndex/vault-catalog.json")
-VAULT_ROOT = os.path.expanduser("~/src/shared-vault")
+INDEX_DIR = os.path.expandvars(os.path.expanduser(
+    os.getenv("INDEX_DIR", "~/src/PageIndex/vault-index")))
+CATALOG_PATH = os.path.expandvars(os.path.expanduser(
+    os.getenv("CATALOG_PATH", "~/src/PageIndex/vault-catalog.json")))
+VAULT_ROOT = os.path.expandvars(os.path.expanduser(
+    os.getenv("VAULT_PATH", "~/src/shared-vault")))
 
 API_KEY = os.getenv("CHATGPT_API_KEY") or os.getenv("OPENAI_API_KEY")
 MODEL = os.getenv("PAGEINDEX_MODEL", "gpt-4o-2024-11-20")
