@@ -141,6 +141,19 @@ def _get_vault_file_map():
     return _vault_file_map
 
 
+def _obsidian_to_markdown(text):
+    """Convert Obsidian wiki-links to standard markdown."""
+    import re
+    # ![[image.png]] → ![image.png](/api/doc?path=image.png&raw=1) — but just strip for now
+    # ![[file]] embeds — convert to linked references
+    text = re.sub(r'!\[\[([^\]]+)\]\]', lambda m: f'*(embedded: {m.group(1)})*', text)
+    # [[link|display]] → display
+    text = re.sub(r'\[\[([^\]|]+)\|([^\]]+)\]\]', r'\2', text)
+    # [[link]] → link
+    text = re.sub(r'\[\[([^\]]+)\]\]', r'\1', text)
+    return text
+
+
 @app.get("/api/doc")
 async def get_document(path: str):
     """Return rendered markdown for a vault document."""
@@ -172,8 +185,9 @@ async def get_document(path: str):
         raise HTTPException(status_code=404, detail="File not found")
 
     raw = full.read_text(errors="replace")
+    processed = _obsidian_to_markdown(raw)
     html = markdown.markdown(
-        raw,
+        processed,
         extensions=["fenced_code", "tables", "toc", "codehilite"],
     )
     return {"path": path, "raw": raw, "html": html}
