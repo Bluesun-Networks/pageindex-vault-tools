@@ -124,19 +124,49 @@ async def api_search(req: SearchRequest):
     return {"results": matches, "deep_results": deep_results, "mode": "llm"}
 
 
+# Build a filename→relative-path map at startup for fast lookups
+_vault_file_map = None
+
+def _get_vault_file_map():
+    global _vault_file_map
+    if _vault_file_map is None:
+        _vault_file_map = {}
+        vault = Path(VAULT_ROOT)
+        for p in vault.rglob("*"):
+            if p.is_file():
+                rel = str(p.relative_to(vault))
+                _vault_file_map[p.name] = rel
+                # Also map by relative path
+                _vault_file_map[rel] = rel
+    return _vault_file_map
+
+
 @app.get("/api/doc")
 async def get_document(path: str):
     """Return rendered markdown for a vault document."""
-    # Resolve safely within VAULT_ROOT
+    vault_resolved = Path(VAULT_ROOT).resolve()
+    
+    # Try direct path first
     full = Path(VAULT_ROOT) / path
     try:
         full = full.resolve()
     except (OSError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid path")
 
-    vault_resolved = Path(VAULT_ROOT).resolve()
     if not str(full).startswith(str(vault_resolved)):
         raise HTTPException(status_code=403, detail="Path outside vault")
+
+    # If not found directly, search by filename
+    if not full.exists():
+        file_map = _get_vault_file_map()
+        filename = Path(path).name
+        mapped = file_map.get(filename) or file_map.get(path)
+        if mapped:
+            full = (Path(VAULT_ROOT) / mapped).resolve()
+            if not str(full).startswith(str(vault_resolved)):
+                raise HTTPException(status_code=403, detail="Path outside vault")
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
 
     if not full.exists():
         raise HTTPException(status_code=404, detail="File not found")
