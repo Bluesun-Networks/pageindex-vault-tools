@@ -67,7 +67,8 @@ BEDROCK_MODELS = {
 BEDROCK_DEFAULT_MODEL = 'anthropic.claude-3-5-sonnet-20241022-v2:0'
 
 # Embedding config
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "auto").lower()  # auto, openai, bedrock
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "")  # auto-detected based on provider
 EMBEDDING_REGION = os.getenv("EMBEDDING_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-west-2"
 
 
@@ -159,23 +160,50 @@ def _embeddings_path():
     return CATALOG_PATH.replace(".json", "-embeddings.npz")
 
 
+def _resolve_embedding_provider():
+    """Determine embedding provider: openai or bedrock."""
+    if EMBEDDING_PROVIDER != "auto":
+        return EMBEDDING_PROVIDER
+    # Auto-detect: prefer OpenAI if key available, fall back to Bedrock
+    if API_KEY or os.getenv("CHATGPT_API_KEY") or os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    if HAS_BOTO3:
+        return "bedrock"
+    raise RuntimeError("No embedding provider available. Set OPENAI_API_KEY or configure AWS credentials.")
+
+
 def _get_embedding_client():
-    """Get a boto3 bedrock-runtime client for embeddings."""
-    if not HAS_BOTO3:
-        raise ImportError("boto3 is required for embedding generation. Install with: pip install boto3")
-    return boto3.client('bedrock-runtime', region_name=EMBEDDING_REGION)
+    """Get embedding client based on provider."""
+    provider = _resolve_embedding_provider()
+    if provider == "openai":
+        key = API_KEY or os.getenv("CHATGPT_API_KEY") or os.getenv("OPENAI_API_KEY")
+        kwargs = {"api_key": key}
+        if BASE_URL:
+            kwargs["base_url"] = BASE_URL
+        return openai.OpenAI(**kwargs)
+    else:
+        if not HAS_BOTO3:
+            raise ImportError("boto3 is required for Bedrock embeddings. Install with: pip install boto3")
+        return boto3.client('bedrock-runtime', region_name=EMBEDDING_REGION)
 
 
 def _embed_text(client, text):
-    """Embed a single text string using Titan Embeddings v2. Returns list of floats."""
-    response = client.invoke_model(
-        modelId=EMBEDDING_MODEL,
-        contentType='application/json',
-        accept='application/json',
-        body=json.dumps({"inputText": text})
-    )
-    result = json.loads(response['body'].read())
-    return result['embedding']
+    """Embed a single text string. Auto-detects provider from client type."""
+    provider = _resolve_embedding_provider()
+    if provider == "openai":
+        model = EMBEDDING_MODEL or "text-embedding-3-small"
+        resp = client.embeddings.create(model=model, input=text)
+        return resp.data[0].embedding
+    else:
+        model = EMBEDDING_MODEL or "amazon.titan-embed-text-v2:0"
+        response = client.invoke_model(
+            modelId=model,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({"inputText": text})
+        )
+        result = json.loads(response['body'].read())
+        return result['embedding']
 
 
 def _doc_to_embedding_text(doc):
@@ -197,32 +225,68 @@ def build_embeddings(catalog):
     if not HAS_NUMPY:
         print("numpy is required for embeddings. Install with: pip install numpy")
         return None
-    if not HAS_BOTO3:
-        print("boto3 is required for embeddings. Install with: pip install boto3")
-        return None
 
     import time
+    import sys
+    provider = _resolve_embedding_provider()
     client = _get_embedding_client()
     total = len(catalog)
-    embeddings = []
-    failed = []
-
-    for i, doc in enumerate(catalog):
-        print(f"  Embedding {i+1}/{total}: {doc.get('doc_name', '?')[:60]}", end="")
-        try:
-            text = _doc_to_embedding_text(doc)
-            emb = _embed_text(client, text)
-            embeddings.append(emb)
-            print(" ✓")
-        except Exception as e:
-            print(f" ✗ ({e})")
-            # Use zero vector as placeholder to maintain alignment
-            if embeddings:
-                embeddings.append([0.0] * len(embeddings[0]))
-            else:
-                embeddings.append([0.0] * 1024)  # Titan v2 default dim
-            failed.append(i)
-            time.sleep(0.5)  # Back off on errors
+    
+    # Build all texts first
+    texts = [_doc_to_embedding_text(doc) for doc in catalog]
+    
+    if provider == "openai":
+        # Batch embedding — OpenAI supports up to 2048 inputs per call
+        BATCH_SIZE = 500
+        all_embeddings = [None] * total
+        failed = []
+        
+        for batch_start in range(0, total, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, total)
+            batch_texts = texts[batch_start:batch_end]
+            print(f"  Embedding batch {batch_start+1}-{batch_end}/{total}...", end="")
+            sys.stdout.flush()
+            try:
+                model = EMBEDDING_MODEL or "text-embedding-3-small"
+                resp = client.embeddings.create(model=model, input=batch_texts)
+                for item in resp.data:
+                    all_embeddings[batch_start + item.index] = item.embedding
+                print(f" ✓ ({batch_end - batch_start} docs)")
+            except Exception as e:
+                print(f" ✗ ({e})")
+                # Mark entire batch as failed
+                for i in range(batch_start, batch_end):
+                    failed.append(i)
+                time.sleep(2)
+        
+        # Fill in failures with zero vectors
+        dim = len(next(e for e in all_embeddings if e is not None)) if any(all_embeddings) else 1536
+        for i in range(total):
+            if all_embeddings[i] is None:
+                all_embeddings[i] = [0.0] * dim
+                if i not in failed:
+                    failed.append(i)
+        
+        embeddings = all_embeddings
+    else:
+        # Bedrock: one at a time (no batch API)
+        embeddings = []
+        failed = []
+        for i, text in enumerate(texts):
+            print(f"  Embedding {i+1}/{total}: {catalog[i].get('doc_name', '?')[:60]}", end="")
+            sys.stdout.flush()
+            try:
+                emb = _embed_text(client, text)
+                embeddings.append(emb)
+                print(" ✓")
+            except Exception as e:
+                print(f" ✗ ({e})")
+                if embeddings:
+                    embeddings.append([0.0] * len(embeddings[0]))
+                else:
+                    embeddings.append([0.0] * 1024)
+                failed.append(i)
+                time.sleep(0.5)
 
     matrix = np.array(embeddings, dtype=np.float32)
     out_path = _embeddings_path()
