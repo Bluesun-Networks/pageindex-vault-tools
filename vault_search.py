@@ -600,10 +600,10 @@ def search(query, deep=True, top_n=10, fast=False):
         print("No relevant documents found.")
         return
     
-    # Phase 2: Deep search within top matches (skip in fast mode)
+    # Phase 2: Deep search within top matches (skip in fast/embedding mode)
     deep_results = {}
-    if deep and not fast:
-        client = client if not fast else get_client()
+    if deep and not fast and mode == "LLM (semantic)":
+        client = client if mode == "LLM (semantic)" else get_client()
         print(f"Deep searching top {min(3, len(matches))} documents...")
         for doc in matches[:3]:
             index_path = doc.get("index_path")
