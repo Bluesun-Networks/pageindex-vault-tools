@@ -13,8 +13,11 @@ from pydantic import BaseModel
 from vault_search import (
     get_client,
     load_catalog,
+    load_embeddings,
+    embedding_search,
     search_catalog,
     deep_search,
+    local_search,
     VAULT_ROOT,
 )
 
@@ -25,8 +28,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Cache the catalog in memory
+# Cache catalog and embeddings in memory
 _catalog = None
+_embeddings = None
 
 
 def get_catalog():
@@ -36,13 +40,21 @@ def get_catalog():
     return _catalog
 
 
+def get_embeddings():
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = load_embeddings()
+    return _embeddings
+
+
 # ── Models ──────────────────────────────────────────────────────────
 
 
 class SearchRequest(BaseModel):
     query: str
-    deep: bool = True
+    deep: bool = False
     top_n: int = 10
+    mode: str = "auto"  # "auto", "embedding", "llm", "keyword"
 
 
 # ── Routes ──────────────────────────────────────────────────────────
@@ -56,21 +68,46 @@ async def index():
 @app.get("/api/stats")
 async def stats():
     catalog = get_catalog()
-    return {"doc_count": len(catalog)}
+    embeddings = get_embeddings()
+    return {
+        "doc_count": len(catalog),
+        "has_embeddings": embeddings is not None and len(embeddings) == len(catalog),
+    }
 
 
 @app.post("/api/search")
 async def api_search(req: SearchRequest):
     catalog = get_catalog()
-    client = get_client()
+    embeddings = get_embeddings()
 
-    # Phase 1 — catalog search (runs LLM calls, may be slow)
+    # Determine search mode
+    mode = req.mode
+    if mode == "auto":
+        if embeddings is not None and len(embeddings) == len(catalog):
+            mode = "embedding"
+        else:
+            mode = "llm"
+
+    if mode == "keyword":
+        matches = local_search(catalog, req.query, req.top_n)
+        return {"results": matches, "deep_results": {}, "mode": "keyword"}
+
+    if mode == "embedding":
+        if embeddings is None or len(embeddings) != len(catalog):
+            return {"error": "Embeddings not available. Run --rebuild-catalog first.", "results": [], "deep_results": {}}
+        matches = await asyncio.to_thread(
+            embedding_search, catalog, embeddings, req.query, req.top_n
+        )
+        return {"results": matches, "deep_results": {}, "mode": "embedding"}
+
+    # LLM mode
+    client = get_client()
     matches = await asyncio.to_thread(
         search_catalog, client, catalog, req.query, req.top_n
     )
 
     if not matches:
-        return {"results": [], "deep_results": {}}
+        return {"results": [], "deep_results": {}, "mode": "llm"}
 
     # Phase 2 — optional deep search on top 3
     deep_results = {}
@@ -84,7 +121,7 @@ async def api_search(req: SearchRequest):
                 if result:
                     deep_results[doc["doc_name"]] = result
 
-    return {"results": matches, "deep_results": deep_results}
+    return {"results": matches, "deep_results": deep_results, "mode": "llm"}
 
 
 @app.get("/api/doc")
